@@ -6,6 +6,7 @@ using System.Drawing;
 using System.Linq;
 using System.Text;
 using System.Windows.Forms;
+using static System.Net.Mime.MediaTypeNames;
 
 namespace PretestPosttestLib_CSharp.message
 {
@@ -15,7 +16,15 @@ namespace PretestPosttestLib_CSharp.message
         public Form1(string s1)
         {
             InitializeComponent();
-            label1.Text = s1;
+            //       label1.Text = s1;
+            UpdateLabelText(s1);
+        }
+
+        public void UpdateLabelText(string text)
+        {
+            this.label1.Text = text;
+            this.label1.Refresh();
+            this.PerformLayout();  // 重新计算布局
         }
     }
 }

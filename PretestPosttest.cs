@@ -21,13 +21,15 @@ namespace PretestPosttestLib_CSharp
     public class PretestPosttest : ITAPComponent, IPretestProcessor, IPosttestProcessor
     {
         #region 常量定义
-
-   //    private const string DEFAULT_PATH = @"C:\PretestPostTestLib";
-        private const string DEFAULT_INI_PATH =@"C:\PretestPostTestLib\PretestPostTestLib.ini";
+ 
+        private const string DEFAULT_INI_PATH = @"C:\PretestPostTestLib\PretestPostTestLib.ini";
         private const int DEFAULT_FAIL_ALERT_COUNT = 3;
         private const string DEFAULT_NG_STATION = "LOADER,SMTS,SMTC,SPIS,SPIC,AOIA,CPUSN";
         private const string DEFAULT_PROCESS_NEED_TEST = "Panic";
         private const string DEFAULT_BARCODE_TYPE = "PPID";
+        
+        // [新增] Socket Server 默认端口，不再从 Config 读取
+        private const int DEFAULT_SERVER_PORT = 8888;
 
         #endregion
 
@@ -35,9 +37,12 @@ namespace PretestPosttestLib_CSharp
 
         public string[] BoardSerialNumbers;
         public static string IniPath = DEFAULT_INI_PATH;
-        private Form _msgWindow=null;
-        private Form _msgWindow2=null;
+        private Form _msgWindow = null;
+        private Form _msgWindow2 = null;
         private static readonly object _lockObj = new object();
+
+        // Socket 服务器实例，用于广播消息给监控端
+        private SocketServer _socketServer = null;
 
         #endregion
 
@@ -67,7 +72,6 @@ namespace PretestPosttestLib_CSharp
                 // 如果 INI 文件不存在，创建默认配置
                 if (!File.Exists(IniPath))
                 {
-           //         Directory.CreateDirectory(DEFAULT_PATH);
                     CreateDefaultIniConfig(iniConfig);
                 }
 
@@ -75,6 +79,10 @@ namespace PretestPosttestLib_CSharp
                 if (File.Exists(IniPath))
                 {
                     RemoveDuplicateSkus(iniConfig);
+                    
+                    // [修改] 启动 Socket 服务器，不再检查 Config 开关，直接启动
+                    StartSocketServer();
+                    
                     successful = true;
                     description = "初始化成功";
                 }
@@ -92,6 +100,34 @@ namespace PretestPosttestLib_CSharp
 
             // 触发初始化完成事件
             RaiseInitializedEvent(successful, description);
+        }
+
+        /// <summary>
+        /// [修改] 启动 Socket 服务器
+        /// 不再从 Config 读取 IP/Port/Switch，直接使用常量端口
+        /// </summary>
+        private void StartSocketServer()
+        {
+            // 防止重复启动
+            if (_socketServer != null)
+            {
+                return;
+            }
+
+            try
+            {
+                Console.WriteLine($"[SocketServer] 正在启动监听端口: {DEFAULT_SERVER_PORT}...");
+                
+                // 创建并启动服务器
+                _socketServer = new SocketServer(DEFAULT_SERVER_PORT);
+                _socketServer.Start();
+                
+                Console.WriteLine($"[SocketServer] 已在端口 {DEFAULT_SERVER_PORT} 启动监听，等待监控端连接...");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[SocketServer] 启动失败: {ex.Message}");
+            }
         }
 
         /// <summary>
@@ -117,10 +153,6 @@ namespace PretestPosttestLib_CSharp
             iniConfig.IniWriteValue("FMDI", "SITE", "CD10");
             iniConfig.IniWriteValue("FMDI", "LINE", "CD2SMTA");
 
-            //SERVER
-            iniConfig.IniWriteValue("SERVER", "SWITCH", "0");
-            iniConfig.IniWriteValue("SERVER", "IP", "192.188.2.198");
-            iniConfig.IniWriteValue("SERVER", "PORT", "8888");
 
 
             // SKU 节（示例）
@@ -192,6 +224,15 @@ namespace PretestPosttestLib_CSharp
 
             try
             {
+                // 停止 Socket 服务器
+                if (_socketServer != null)
+                {
+                    _socketServer.Stop();
+                    _socketServer.Dispose();
+                    _socketServer = null;
+                    Console.WriteLine("[SocketServer] 服务器已停止。");
+                }
+
                 // 清理资源
                 _msgWindow?.Dispose();
                 _msgWindow2?.Dispose();
@@ -306,10 +347,10 @@ namespace PretestPosttestLib_CSharp
 
                 // 解析 BOM 信息
                 string sku = Getbom.sku;
-                string[] stations = Getbom.station_check.Split(';');
+                string[] stations = Getbom.station_check.Split(new char[] { ';' }, StringSplitOptions.RemoveEmptyEntries);
                 string ver = Getbom.sku.Length >= 11 ? Getbom.sku.Substring(8, 3) : string.Empty;
                 string model = Getbom.model;
-                string[] boards = Getbom.batcode_all.Split(';');
+                string[] boards = Getbom.batcode_all.Split(new char[] { ';' }, StringSplitOptions.RemoveEmptyEntries);
 
                 // 验证 SKU 配置
                 Prejudgement? skuCheckResult = ValidateSkuConfig(iniConfig, sku, fixtureID, stations, boards, ver, model);
@@ -506,29 +547,42 @@ namespace PretestPosttestLib_CSharp
         /// </summary>
         private Prejudgement CheckStationConfig(Iniconfig iniConfig, string[] stations, int boardNumber)
         {
-            string ngStationConfig = iniConfig.IniReadValue("CONFIG", "NG_SATION");
-            string processNeedTest = iniConfig.IniReadValue("CONFIG", "PROCESS_NEED_TEST");
-            string[] ngStations = ngStationConfig.Split(',');
-
-            bool isNgStation = ngStations.Any(s => stations.Take(boardNumber).Contains(s));
-
-            if (!isNgStation)
+            try
             {
-                return Prejudgement.Test;
-            }
+                string ngStationConfig = iniConfig.IniReadValue("CONFIG", "NG_SATION"); 
+                string processNeedTest = iniConfig.IniReadValue("CONFIG", "PROCESS_NEED_TEST");
+                string[] ngStations = ngStationConfig.Split(',').Select(s => s.Trim().ToUpper()).ToArray();
+                
+                // 修复站别匹配逻辑 - 检查所有站别
+                bool isNgStation = stations.Take(boardNumber)
+                    .Select(s => s.Trim().ToUpper())
+                    .Any(s => ngStations.Contains(s));
 
-            switch (processNeedTest)
-            {
-                case "DoNotTest_Pass":
-                    return Prejudgement.DoNotTest_Pass;
-                case "DoNotTest_Fail":
-                    return Prejudgement.DoNotTest_Fail;
-                case "Test":
+                if (!isNgStation)
+                {
                     return Prejudgement.Test;
-                case "Panic":
-                default:
-                    StartThreadSafe(Messagestationfail);
-                    return Prejudgement.Panic;
+                }
+
+                switch (processNeedTest)
+                {
+                    case "DoNotTest_Pass":
+                        return Prejudgement.DoNotTest_Pass;
+                    case "DoNotTest_Fail":
+                        return Prejudgement.DoNotTest_Fail;
+                    case "Test":
+                        return Prejudgement.Test;
+                    case "Panic":
+                        StartThreadSafe(Messagestationfail);
+                        return Prejudgement.Panic;
+                    default:
+                        StartThreadSafe(Messagestationfail);
+                        return Prejudgement.Panic;
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[StationCheck] 异常：{ex.Message}");
+                return Prejudgement.Panic; 
             }
         }
 
@@ -623,60 +677,40 @@ namespace PretestPosttestLib_CSharp
 
         #region 消息显示方法
 
-        private async Task SendDataAsync(string msg)
+        /// <summary>
+        /// 通过 Socket Server 广播消息
+        /// </summary>
+        private void BroadcastMessage(string msg)
         {
-            var iniConfig = new Iniconfig();
-            iniConfig.INIFile(IniPath);
-
-            // 读取配置并验证
-            string ip = iniConfig.IniReadValue("SERVER", "IP");
-            string portStr = iniConfig.IniReadValue("SERVER", "PORT");
-
-            if (string.IsNullOrEmpty(ip) || string.IsNullOrEmpty(portStr))
+            if (_socketServer == null)
             {
-                Console.WriteLine($"[SendData] 服务器配置无效：IP={ip}, Port={portStr}");
+                Console.WriteLine("[Broadcast] 服务器未初始化，无法发送消息。");
                 return;
             }
 
-            if (!int.TryParse(portStr, out int port))
-            {
-                Console.WriteLine($"[SendData] 端口号格式错误：{portStr}");
+            if (string.IsNullOrEmpty(msg))
                 return;
-            }
 
-            // 构建发送消息
-            string message = string.IsNullOrEmpty(msg) ? ": 未知信息" : msg;
-
-            SocketClient client = null;
             try
             {
-                client = new SocketClient(ip, port);
-                await Task.Run(() => client.Connect());
-                await Task.Run(() => client.SendString(message));
-                Console.WriteLine($"[SendData] 发送成功：{message}");
+                int count = _socketServer.BroadcastString(msg);
+                Console.WriteLine($"[Broadcast] 消息已广播: {msg} (接收客户端数: {count})");
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[SendData] 发送失败：{ex.Message}");
-            }
-            finally
-            {
-                client?.Disconnect();
+                Console.WriteLine($"[Broadcast] 广播失败: {ex.Message}");
             }
         }
+
         public virtual void Message3fail()
         {
             try
             {
+                // [修改] 直接广播，不再读取 SERVER/SWITCH
+                BroadcastMessage("Continuetestfailed");
+
                 var iniConfig = new Iniconfig();
                 iniConfig.INIFile(IniPath);
-
-                string serverSwitch = iniConfig.IniReadValue("SERVER", "SWITCH");
-
-                if (serverSwitch == "1")
-                {
-                    _ = SendDataAsync("s:Continue test failed");
-                }
 
                 if (_msgWindow2 != null && !_msgWindow2.IsDisposed)
                 {
@@ -709,6 +743,7 @@ namespace PretestPosttestLib_CSharp
         {
             MessageBox.Show("INI 里面板子数量不对", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
+
         public virtual void Messageskufail(object sku)
         {
             MessageBox.Show($"{sku}: PretestPostTestLib.ini 里没有这个状态", "错误", 
@@ -738,19 +773,14 @@ namespace PretestPosttestLib_CSharp
             iniConfig.INIFile(IniPath);
             try
             {
-                string serverSwitch = iniConfig.IniReadValue("SERVER", "SWITCH");
-
                 string station = Getbom.station_check;
                 string sn = Getbom.batcode_all;
                 string[] sns = sn.Split(';');
                 string message = string.Join("\n", sns.Where(s => !string.IsNullOrEmpty(s)));
                 message += $"\n{station}: 站别错误";
-                if (serverSwitch == "1")
-                {
-                    _ = SendDataAsync("s:StationError");
-                }
-            
-
+                
+                // [修改] 直接广播，不再读取 SERVER/SWITCH
+                BroadcastMessage("StationError");
 
                 if (_msgWindow != null && !_msgWindow.IsDisposed)
                 {

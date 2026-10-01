@@ -4,7 +4,6 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Text;
-using System.Threading.Tasks;
 using System.Text.RegularExpressions;
 using System.Xml;
 using System.Windows.Forms;
@@ -13,65 +12,66 @@ namespace PretestPosttestLib_CSharp
 {
     public class Refun
     {
-        public static string getbomstr(string patten, string matstr)
+        public static string getbomstr(string pattern, string matstr)
         {
             string output = "";
-            Regex re = new Regex(patten, RegexOptions.IgnoreCase);
+            Regex re = new Regex(pattern, RegexOptions.IgnoreCase);
             MatchCollection matches = re.Matches(matstr);
             foreach (Match match in matches)
             {
                 GroupCollection groups = match.Groups;
                 output = groups[1].Value;
-               if (groups[2].Value.Length>0)
+                if (groups[2].Value.Length > 0)
                 {
                     output = output + "," + groups[2].Value;
-                }                  
+                }
             }
             return output;
         }
-
     }
-
 
     public class Getbom
     {
-
         public static string model;
         public static string sku;
         public static string batcode_all;
         public static string station_check;
 
-
-
-
         public static bool getbom(string sn)
         {
-
-            int i;
-            string all_sn = "";
-            bool isppid = false;
             bool ackok = false;
             batcode_all = "";
             station_check = "";
+            model = "";
+            sku = "";
 
             List<string> boards = new List<string>();
-            List<string> sub_boards = new List<string>();
+            List<string> subBoards = new List<string>();
+            List<string> stationList = new List<string>();  // 优化：使用 List 收集站别
 
-            string configpath=PretestPosttest.IniPath;
-            Iniconfig iniconfig = new Iniconfig();
-            iniconfig.INIFile(configpath);
-            Dictionary<string, string> bar_macs = new Dictionary<string, string>();
-            Dictionary<string, string> bar_ppids = new Dictionary<string, string>();
-            Dictionary<string, string> bar_stations = new Dictionary<string, string>();
+            try
+            {
+                string configPath = PretestPosttest.IniPath;
+                Iniconfig iniconfig = new Iniconfig();
+                iniconfig.INIFile(configPath);
 
-            string text = iniconfig.IniReadValue("FMDI", "URL") + "?sn=" + sn +"&customer="+ iniconfig.IniReadValue("FMDI", "CUSTOMER") + "&group="+ iniconfig.IniReadValue("FMDI", "GROUP") + "&line="+ iniconfig.IniReadValue("FMDI", "LINE") + "&site="+ iniconfig.IniReadValue("FMDI", "SITE") + "&intl=0.0.0.11-StandardClientImpl.dll-7.0.0.0";
-            Console.WriteLine(text);
-       
+                Dictionary<string, string> barMacs = new Dictionary<string, string>();
+                Dictionary<string, string> barPpids = new Dictionary<string, string>();
+                Dictionary<string, string> barStations = new Dictionary<string, string>();
+
+                // 构建 FMDI 请求 URL
+                string text = $"{iniconfig.IniReadValue("FMDI", "URL")}?sn={sn}" +
+                    $"&customer={iniconfig.IniReadValue("FMDI", "CUSTOMER")}" +
+                    $"&group={iniconfig.IniReadValue("FMDI", "GROUP")}" +
+                    $"&line={iniconfig.IniReadValue("FMDI", "LINE")}" +
+                    $"&site={iniconfig.IniReadValue("FMDI", "SITE")}" +
+                    $"&intl=0.0.0.11-StandardClientImpl.dll-7.0.0.0";
+                Console.WriteLine($"[FMDI] Request URL: {text}");
+
                 HttpWebRequest httpWebRequest = (HttpWebRequest)WebRequest.Create(text);
                 httpWebRequest.Method = "GET";
                 httpWebRequest.Proxy = null;
                 httpWebRequest.UserAgent = "FMDICLIENT";
-
                 httpWebRequest.Timeout = 10000;
                 httpWebRequest.ReadWriteTimeout = 10000;
 
@@ -82,201 +82,216 @@ namespace PretestPosttestLib_CSharp
                 foreach (XmlNode childNode in xmlDocument.ChildNodes)
                 {
                     string output = childNode.InnerText;
-                 //   string path1 = "BOM.txt";
-                 //   StreamWriter streamWriter1 = new StreamWriter(path1);
-                 //   streamWriter1.Write(output);
-                 //   streamWriter1.Close();
 
-                    string skuPatten = @".*SET SKU=(\w+).*";
-                    string modPatten = @".*SET MODELNAME=\s*(\w+).*";
-                    string sn1Patten = @".*SET SN=(\d+).*";
-                    string barsPatten = @".*SET SNMULTI=(.*);";
-                    string mac1Patten = @".*SET MAC_LAN_1=(\w+).*";
-                    string macsPatten = @".*SET MACMULTI_LAN_1=(.*);";
-                    string bar_macPatten = @".*SET SNMACMULTI=(.*);";
-                    string ppid1Patten = @".*SET SSN=(\w+).*";
-                    string ppidsPatten = @".*SET SSNMULTI=(.*);";
-                    string stationPatten = @".*SET GROUPMULTI=(.*);";
+                    // 正则表达式定义
+                    string skuPattern = @".*SET SKU=(\w+).*";
+                    string modPattern = @".*SET MODELNAME=\s*(\w+).*";
+                    string sn1Pattern = @".*SET SN=(\d+).*";
+                    string barsPattern = @".*SET SNMULTI=(.*);";
+                    string mac1Pattern = @".*SET MAC_LAN_1=(\w+).*";
+                    string macsPattern = @".*SET MACMULTI_LAN_1=(.*);";
+                    string barMacPattern = @".*SET SNMACMULTI=(.*);";
+                    string ppid1Pattern = @".*SET SSN=(\w+).*";
+                    string ppidsPattern = @".*SET SSNMULTI=(.*);";
+                    string stationPattern = @".*SET GROUPMULTI=(.*);";
 
-                    sku = Refun.getbomstr(skuPatten, output);
-                    model = Refun.getbomstr(modPatten, output);
-                    string sn1 = Refun.getbomstr(sn1Patten, output);
-                    string bars = Refun.getbomstr(barsPatten, output);
-                    string mac1 = Refun.getbomstr(mac1Patten, output);
-                    string macs = Refun.getbomstr(macsPatten, output);
-                    string bar_mac = Refun.getbomstr(bar_macPatten, output);
-                    string ppid1 = Refun.getbomstr(ppid1Patten, output);
-                    string ppids = Refun.getbomstr(ppidsPatten, output);
-                    string station = Refun.getbomstr(stationPatten, output);
+                    // 解析 FMDI 返回数据
+                    sku = Refun.getbomstr(skuPattern, output);
+                    model = Refun.getbomstr(modPattern, output);
+                    string sn1 = Refun.getbomstr(sn1Pattern, output);
+                    string bars = Refun.getbomstr(barsPattern, output);
+                    string mac1 = Refun.getbomstr(mac1Pattern, output);
+                    string macs = Refun.getbomstr(macsPattern, output);
+                    string barMac = Refun.getbomstr(barMacPattern, output);
+                    string ppid1 = Refun.getbomstr(ppid1Pattern, output);
+                    string ppids = Refun.getbomstr(ppidsPattern, output);
+                    string station = Refun.getbomstr(stationPattern, output);
 
+                    Console.WriteLine($"[FMDI] SKU={sku}, Model={model}, SN={sn1}");
 
+                    // 解析 MAC 地址
+                    ParseBarMacs(barMac, barMacs);
 
-                    if (bar_mac.Length > 0)
+                    // 解析站别信息
+                    ParseStations(bars, station, barStations);
+
+                    // 解析 PPID 信息
+                    bool isPpid = ParsePpids(bars, ppids, barPpids);
+
+                    // 构建板卡信息
+                    BuildBoardInfo(sn1, barMacs, barPpids, barStations, isPpid, 
+                        boards, subBoards, stationList);
+
+                    // 拼接板卡序列号（优化：使用 string.Join 避免尾随分号）
+                    if (boards.Count > 0)
                     {
-
-                        string[] bar_maca = bar_mac.Split(';');
-                        for (i = 0; i < bar_maca.Length; i++)
+                        batcode_all = string.Join(";", boards);
+                        if (subBoards.Count > 0)
                         {
-                            if (i < bar_maca.Length - 1)
-                            {
-                                if (bar_maca[i].Length == 13)
-                                {
-                                    if (bar_maca[i + 1].Length == 12)
-                                    {
-                                        bar_macs.Add(bar_maca[i], bar_maca[i + 1]);
-                                    }
-                                    else
-                                    {
-                                        bar_macs.Add(bar_maca[i], "");
-
-                                    }
-
-                                }
-
-                            }
-
-                            if (i == bar_maca.Length - 1)
-                            {
-                                if (bar_maca[i].Length == 13)
-                                {
-                                    bar_macs.Add(bar_maca[i], "");
-                                }
-                            }
+                            batcode_all += ";" + string.Join(";", subBoards);
                         }
-                    }
-
-                    if ((bars.Length > 0) && (station.Length > 0))
-                    {
-                        string[] bara = bars.Split(';');
-                        string[] stationa = station.Split(';');
-                        int board_num = bara.Length;
-                        int sta_num = stationa.Length;
-                        //        Console.WriteLine(board_num);
-                        //         Console.WriteLine(sta_num);
-                        if (board_num != sta_num)
-                        {
-                            MessageBox.Show("FMDI回传有误station与SN数量不同");
-                        }
-                        else
-                        {
-                            for (i = 0; i < board_num; i++)
-                            {
-                                bar_stations.Add(bara[i], stationa[i]);
-
-                            }
-                        }
-
-                    }
-
-
-
-                    if ((bars.Length > 0) && (ppids.Length > 0))
-                    {
-                        string[] bara = bars.Split(';');
-                        string[] ppida = ppids.Split(';');
-                        int board_num = bara.Length;
-                        int ppid_num = ppida.Length;
-                        if (board_num != ppid_num)
-                        {
-                            MessageBox.Show("FMDI回传有误PPID与SN数量不同");
-                        }
-                        else
-                        {
-                            for (i = 0; i < board_num; i++)
-                            {
-                                bar_ppids.Add(bara[i], ppida[i]);
-
-                            }
-                            isppid = true;
-                        }
-
-                    }
-
-
-
-                    foreach (var item in bar_macs)
-                    {
-                        if (isppid)
-                        {
-                            if (sn1 == item.Key)
-                            {
-                                boards.Add(item.Key + "_" + bar_ppids[item.Key] + "_" + item.Value);
-                                station_check = station_check + ";" + bar_stations[item.Key];
-                            }
-                            else
-                            {
-                                if (sn1.Substring(1, 8) == item.Key.Substring(1, 8))
-                                {
-                                    boards.Add(item.Key + "_" + bar_ppids[item.Key] + "_" + item.Value);
-                                    station_check = station_check + ";" + bar_stations[item.Key];
-                                }
-                                else
-                                {
-                                    sub_boards.Add(item.Key + "_" + bar_ppids[item.Key] + "_" + item.Value);
-                                    station_check = station_check + ";" + bar_stations[item.Key];
-
-                                }
-                            }
-                        }
-                        else
-                        {
-                            if (sn1 == item.Key)
-                            {
-                                boards.Add(item.Key + "__" + item.Value);
-                                station_check = station_check + ";" + bar_stations[item.Key];
-                            }
-                            else
-                            {
-                                if (sn1.Substring(1, 8) == item.Key.Substring(1, 8))
-                                {
-                                    boards.Add(item.Key + "__" + item.Value);
-                                    station_check = station_check + ";" + bar_stations[item.Key];
-                                }
-                                else
-                                {
-                                    sub_boards.Add(item.Key + "__" + item.Value);
-                                    station_check = station_check + ";" + bar_stations[item.Key];
-
-                                }
-                            }
-
-                        }
-
-                    }
-
-
-                    for (i = 0; i < boards.Count; i++)
-                    {
-
-                        all_sn = all_sn + boards[i] + "\r\n";
-                        batcode_all = batcode_all + boards[i] + ";";
                         ackok = true;
                     }
 
-                    for (i = 0; i < sub_boards.Count; i++)
-                    {
+                    // 拼接站别信息（优化：使用 string.Join 避免前导分号）
+                    station_check = string.Join(";", stationList);
 
-                        all_sn = all_sn + sub_boards[i] + "\r\n";
-                        batcode_all = batcode_all + sub_boards[i] + ";";
-                    }
+                    Console.WriteLine($"[FMDI] station_check={station_check}");
+                    Console.WriteLine($"[FMDI] batcode_all={batcode_all}");
 
-
-                    string path = "ACK.txt";
-                    StreamWriter streamWriter = new StreamWriter(path);
-                    streamWriter.Write(model + "_");
-                    streamWriter.Write(sku + "_");
-                    streamWriter.Write(station_check + "\r\n");
-                    streamWriter.Write(all_sn + "\r\n");
-                    streamWriter.Write("\n");
-                    streamWriter.Close();
-
+                    // 写入 ACK 文件
+                    WriteAckFile(model, sku, station_check, boards, subBoards);
                 }
 
-             
+                response.Close();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[FMDI] 获取 BOM 信息失败：{ex.Message}");
+                MessageBox.Show($"获取 BOM 信息失败：{ex.Message}", "错误", 
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
 
             return ackok;
         }
-    
 
+        /// <summary>
+        /// 解析 MAC 地址信息
+        /// </summary>
+        private static void ParseBarMacs(string barMac, Dictionary<string, string> barMacs)
+        {
+            if (string.IsNullOrEmpty(barMac)) return;
+
+            string[] barMaca = barMac.Split(';');
+            for (int i = 0; i < barMaca.Length; i++)
+            {
+                if (barMaca[i].Length == 13)
+                {
+                    string macValue = (i < barMaca.Length - 1 && barMaca[i + 1].Length == 12) 
+                        ? barMaca[i + 1] : "";
+                    barMacs.Add(barMaca[i], macValue);
+                }
+            }
+        }
+
+        /// <summary>
+        /// 解析站别信息
+        /// </summary>
+        private static void ParseStations(string bars, string station, 
+            Dictionary<string, string> barStations)
+        {
+            if (string.IsNullOrEmpty(bars) || string.IsNullOrEmpty(station)) return;
+
+            string[] bara = bars.Split(';');
+            string[] stationa = station.Split(';');
+
+            if (bara.Length != stationa.Length)
+            {
+                MessageBox.Show("FMDI 回传有误 station 与 SN 数量不同");
+                return;
+            }
+
+            for (int i = 0; i < bara.Length; i++)
+            {
+                barStations.Add(bara[i], stationa[i]);
+            }
+        }
+
+        /// <summary>
+        /// 解析 PPID 信息
+        /// </summary>
+        private static bool ParsePpids(string bars, string ppids, 
+            Dictionary<string, string> barPpids)
+        {
+            if (string.IsNullOrEmpty(bars) || string.IsNullOrEmpty(ppids)) return false;
+
+            string[] bara = bars.Split(';');
+            string[] ppida = ppids.Split(';');
+
+            if (bara.Length != ppida.Length)
+            {
+                MessageBox.Show("FMDI 回传有误 PPID 与 SN 数量不同");
+                return false;
+            }
+
+            for (int i = 0; i < bara.Length; i++)
+            {
+                barPpids.Add(bara[i], ppida[i]);
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// 构建板卡信息
+        /// </summary>
+        private static void BuildBoardInfo(string sn1, 
+            Dictionary<string, string> barMacs,
+            Dictionary<string, string> barPpids,
+            Dictionary<string, string> barStations,
+            bool isPpid,
+            List<string> boards,
+            List<string> subBoards,
+            List<string> stationList)  // 优化：添加站别列表参数
+        {
+            foreach (var item in barMacs)
+            {
+                string boardInfo = isPpid 
+                    ? $"{item.Key}_{barPpids[item.Key]}_{item.Value}"
+                    : $"{item.Key}__{item.Value}";
+
+                bool isMainBoard = IsMainBoard(sn1, item.Key);
+                List<string> targetList = isMainBoard ? boards : subBoards;
+                targetList.Add(boardInfo);
+
+                // 优化：收集站别到 List
+                if (barStations.ContainsKey(item.Key))
+                {
+                    stationList.Add(barStations[item.Key]);
+                }
+            }
+        }
+
+        /// <summary>
+        /// 判断是否为主板
+        /// </summary>
+        private static bool IsMainBoard(string sn1, string key)
+        {
+            if (sn1 == key) return true;
+            if (sn1.Length > 8 && key.Length > 8)
+            {
+                return sn1.Substring(1, 8) == key.Substring(1, 8);
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// 写入 ACK 文件
+        /// </summary>
+        private static void WriteAckFile(string model, string sku, string stationCheck, 
+            List<string> boards, List<string> subBoards)
+        {
+            try
+            {
+                string path = "ACK.txt";
+                StringBuilder sb = new StringBuilder();
+                sb.AppendLine($"{model}_{sku}_{stationCheck}");
+                
+                foreach (string board in boards)
+                {
+                    sb.AppendLine(board);
+                }
+                foreach (string subBoard in subBoards)
+                {
+                    sb.AppendLine(subBoard);
+                }
+                sb.AppendLine();
+
+                File.WriteAllText(path, sb.ToString());
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ACK] 写入文件失败：{ex.Message}");
+            }
+        }
     }
 }
