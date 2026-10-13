@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.ConstrainedExecution;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -675,6 +676,101 @@ namespace PretestPosttestLib_CSharp
 
         #endregion
 
+        #region TAP 主窗口唤醒
+
+        private const int SW_RESTORE = 9;
+
+        [DllImport("user32.dll")]
+        private static extern bool IsIconic(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+        [DllImport("user32.dll")]
+        private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        private static extern bool IsWindowVisible(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto)]
+        private static extern int GetWindowTextLength(IntPtr hWnd);
+
+        private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+        /// <summary>
+        /// 弹出提示窗口前调用：若 TAP 主窗口处于最小化状态，先还原并置前，
+        /// 以保证提示窗口能显示在最顶层。
+        /// </summary>
+        private void RestoreTapMainWindow()
+        {
+            try
+            {
+                IntPtr hWnd = GetTapMainWindowHandle();
+                if (hWnd == IntPtr.Zero)
+                {
+                    return;
+                }
+
+                if (IsIconic(hWnd))
+                {
+                    ShowWindow(hWnd, SW_RESTORE);
+                }
+
+                SetForegroundWindow(hWnd);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[RestoreTapMainWindow] 还原 TAP 主窗口失败：{ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 获取 TAP 主窗口句柄：优先使用进程主窗口，取不到时枚举当前进程的顶层可见窗口
+        /// </summary>
+        private IntPtr GetTapMainWindowHandle()
+        {
+            IntPtr hWnd = Process.GetCurrentProcess().MainWindowHandle;
+            if (hWnd != IntPtr.Zero)
+            {
+                return hWnd;
+            }
+
+            IntPtr result = IntPtr.Zero;
+            uint currentPid = (uint)Process.GetCurrentProcess().Id;
+
+            EnumWindows((hWndEnum, lParam) =>
+            {
+                uint pid;
+                GetWindowThreadProcessId(hWndEnum, out pid);
+
+                if (pid != currentPid)
+                {
+                    return true;
+                }
+                if (!IsWindowVisible(hWndEnum))
+                {
+                    return true;
+                }
+                if (GetWindowTextLength(hWndEnum) == 0)
+                {
+                    return true;
+                }
+
+                result = hWndEnum;
+                return false;
+            }, IntPtr.Zero);
+
+            return result;
+        }
+
+        #endregion
+
         #region 消息显示方法
 
         /// <summary>
@@ -706,6 +802,9 @@ namespace PretestPosttestLib_CSharp
         {
             try
             {
+                // 先确保 TAP 主窗口已还原，避免弹窗被最小化的主窗口遮住
+                RestoreTapMainWindow();
+
                 // [修改] 直接广播，不再读取 SERVER/SWITCH
                 BroadcastMessage("Continuetestfailed");
 
@@ -773,6 +872,9 @@ namespace PretestPosttestLib_CSharp
             iniConfig.INIFile(IniPath);
             try
             {
+                // 先确保 TAP 主窗口已还原，避免弹窗被最小化的主窗口遮住
+                RestoreTapMainWindow();
+
                 string station = Getbom.station_check;
                 string sn = Getbom.batcode_all;
                 string[] sns = sn.Split(';');
